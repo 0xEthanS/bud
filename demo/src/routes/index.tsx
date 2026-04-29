@@ -605,36 +605,45 @@ function HomePage() {
     let cancelled = false;
 
     async function loadInitialSession() {
-      const hostedAvailabilityPromise = loadDemoHostedProviderAvailability();
       const storedSettings = getDemoSettings();
-      const shouldWaitForHostedAvailability =
-        !storedSettings.modelId.startsWith("web-llm/");
-      const hostedAvailability = shouldWaitForHostedAvailability
-        ? await hostedAvailabilityPromise
-        : null;
+      const hostedAvailability = await loadDemoHostedProviderAvailability();
       const availableModels = availableDemoModels(
         storedSettings,
         hostedAvailability,
       );
-      const settings = availableModels.some(
-        (model) => model.id === storedSettings.modelId,
-      )
+
+      // Check whether the stored model is actually usable right now —
+      // not just present in the list. A local model that hasn't been
+      // downloaded is "available" but not usable.
+      const nextModelPreparation = getDemoModelPreparationStatus(
+        storedSettings.modelId,
+      );
+      const storedModelUsable = canUseSelectedModel(
+        storedSettings,
+        nextModelPreparation.ready,
+        availableModels,
+      );
+
+      const settings = storedModelUsable
         ? storedSettings
         : saveDemoSettings({
             ...storedSettings,
-            modelId: availableModels[0]?.id ?? storedSettings.modelId,
+            modelId:
+              availableModels.find(
+                (model) => model.provider !== "local",
+              )?.id ??
+              availableModels[0]?.id ??
+              storedSettings.modelId,
           });
 
-      setDemoSettings(settings);
-      setHostedProviderAvailability(hostedAvailability);
-      setModelRuntimeStatus(getDemoModelRuntimeStatus());
-      setIsLoading(true);
-      const nextModelPreparation = getDemoModelPreparationStatus(
-        settings.modelId,
-      );
+      // Re-check preparation for the (possibly changed) model.
+      const finalModelPreparation =
+        settings.modelId === storedSettings.modelId
+          ? nextModelPreparation
+          : getDemoModelPreparationStatus(settings.modelId);
       const nextCanUseChat = canUseSelectedModel(
         settings,
-        nextModelPreparation.ready,
+        finalModelPreparation.ready,
         availableModels,
       );
       const nextSessions = nextCanUseChat ? await listDemoSessions() : [];
@@ -645,15 +654,15 @@ function HomePage() {
         sessionId && nextCanUseChat ? await loadDemoMessages(sessionId) : [];
 
       if (cancelled) return;
-      setModelPreparation(nextModelPreparation);
+      setDemoSettings(settings);
+      setHostedProviderAvailability(hostedAvailability);
+      setModelRuntimeStatus(getDemoModelRuntimeStatus());
+      setModelPreparation(finalModelPreparation);
       setActiveSessionId(sessionId);
       setMessages(nextMessages);
       setSessions(nextSessions);
       setIsLoading(false);
 
-      void hostedAvailabilityPromise.then((nextAvailability) => {
-        if (!cancelled) setHostedProviderAvailability(nextAvailability);
-      });
       void refreshDemoModelPreparationStatus(settings.modelId).then(
         (refreshed) => {
           if (!cancelled) setModelPreparation(refreshed);
